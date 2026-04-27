@@ -402,10 +402,12 @@ def generate_ticket(user_name, username, event_title, event_date, phone, gender,
     draw.rectangle([15, 15, width-15, height-15], outline='#e94560', width=1)
     draw.rectangle([20, 20, width-20, height-20], outline='#e94560', width=1)
     
+    # Загружаем шрифт из файла в репозитории
     try:
-        font_title = ImageFont.truetype("arial.ttf", 40)
-        font_normal = ImageFont.truetype("arial.ttf", 24)
-        font_small = ImageFont.truetype("arial.ttf", 18)
+        font_path = "DejaVuLGCSans.ttf"  # ← изменено
+        font_title = ImageFont.truetype(font_path, 40)
+        font_normal = ImageFont.truetype(font_path, 24)
+        font_small = ImageFont.truetype(font_path, 18)
     except:
         font_title = ImageFont.load_default()
         font_normal = ImageFont.load_default()
@@ -635,7 +637,7 @@ async def show_event_details(callback: CallbackQuery, state: FSMContext):
 📅 **Дата:** {event_date} в {event['event_time']}
 📍 **Место:** {event['venue']}
 🔞 **Возраст:** {event['age_restriction']}
-💰 **Цены:** Мужской — {event['price_male']} ₽, Женский — {event['price_female']} ₽
+💰 **Цена билета:** {event['price_female']}-{event['price_male']} ₽ (зависит от пола)
 
 ❗ Для регистрации потребуется:
 • ФИО
@@ -797,7 +799,8 @@ async def confirm_registration(callback: CallbackQuery, state: FSMContext):
         caption=f"🎫 Ваш билет на мероприятие «{data['event_title']}»\n\n"
                 f"💳 Сумма к оплате: {data['price']} ₽\n\n"
                 f"**Отлично, скоро с вами свяжется наш босс для оплаты!**\n\n"
-                f"Сохраните это сообщение. При входе покажите билет организаторам.",
+                f"Сохраните это сообщение. При входе покажите билет организаторам.\n\n"
+                f"❗️ Пригласи друга по реферальной программе и получи подарок на тусовке)",
         parse_mode="Markdown"
     )
     
