@@ -112,7 +112,7 @@ class Database:
     def save_user(self, user_id, username, full_name):
         cursor = self.conn.cursor()
         cursor.execute('''
-            INSERT OR IGNORE INTO users (user_id, username, full_name)
+            INSERT OR REPLACE INTO users (user_id, username, full_name)
             VALUES (?, ?, ?)
         ''', (user_id, username, full_name))
         self.conn.commit()
@@ -211,7 +211,8 @@ class Database:
     def get_registrations_for_event(self, event_id):
         cursor = self.conn.cursor()
         cursor.execute('''
-            SELECT r.full_name, r.birth_date, r.phone, r.gender, r.price, r.comment, r.registered_at, u.username
+            SELECT r.full_name, r.birth_date, r.phone, r.gender, r.price, r.comment, r.registered_at, 
+                   COALESCE(u.username, '-') as username
             FROM registrations r
             LEFT JOIN users u ON r.user_id = u.user_id
             WHERE r.event_id = ?
@@ -284,7 +285,7 @@ class Database:
         """Получить список приглашённых пользователем с их username"""
         cursor = self.conn.cursor()
         cursor.execute('''
-            SELECT r.referred_id, r.referred_name, r.registered, u.username
+            SELECT r.referred_id, r.referred_name, r.registered, COALESCE(u.username, '-') as username
             FROM referrals r
             LEFT JOIN users u ON r.referred_id = u.user_id
             WHERE r.referrer_id = ?
@@ -300,7 +301,7 @@ class Database:
         cursor.execute('''
             SELECT r.referrer_id, r.referred_id, r.referred_name, r.registered,
                    CASE WHEN reg.id IS NOT NULL THEN 'Да' ELSE 'Нет' END as registered_on_event,
-                   u.username as referred_username
+                   COALESCE(u.username, '-') as referred_username
             FROM referrals r
             LEFT JOIN registrations reg ON r.referred_id = reg.user_id
             LEFT JOIN users u ON r.referred_id = u.user_id
@@ -432,7 +433,7 @@ def generate_ticket(user_name, username, event_title, event_date, phone, gender,
     draw.text((40, 160), f"Дата: {event_date}", fill='#cccccc', font=font_normal)
     draw.text((40, 210), f"Участник: {user_name}", fill='white', font=font_normal)
     
-    username_text = f"@{username}" if username else "Не указан"
+    username_text = f"@{username}" if username and username != '-' else "Не указан"
     draw.text((40, 260), f"Telegram: {username_text}", fill='#aaffdd', font=font_normal)
     
     draw.text((40, 310), f"Телефон: {phone}", fill='white', font=font_normal)
@@ -603,13 +604,8 @@ async def show_afisha(callback: CallbackQuery):
         except:
             date_str = event['event_date']
         
-        # Получаем количество свободных мест
-        current_count = db.get_current_participants_count(event['event_id'])
-        max_count = event['max_participants'] if event['max_participants'] else 60
-        places_left = max_count - current_count
-        
         keyboard.inline_keyboard.append([
-            InlineKeyboardButton(text=f"{event['title']} — {date_str} | 🎟️ {places_left} мест", callback_data=f"event_{event['event_id']}")
+            InlineKeyboardButton(text=f"{event['title']} — {date_str}", callback_data=f"event_{event['event_id']}")
         ])
     
     keyboard.inline_keyboard.append([InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_main")])
@@ -640,9 +636,8 @@ async def show_event_details(callback: CallbackQuery, state: FSMContext):
     
     if current_count >= max_count:
         await callback.message.edit_text(
-            f"😔 К сожалению, на мероприятие «{event['title']}» уже зарегистрировано {max_count} человек.\n\n"
-            f"**Места закончились!**\n\n"
-            f"Следите за нашими следующими тусовками!",
+            f"😔 К сожалению, дом BOB'a уже переполнен😭\n\n"
+            f"Я буду ждать тебя на следующей неделе❤️",
             reply_markup=back_keyboard(),
             parse_mode="Markdown"
         )
@@ -672,7 +667,6 @@ async def show_event_details(callback: CallbackQuery, state: FSMContext):
 📍 **Место:** {event['venue']}
 🔞 **Возраст:** {event['age_restriction']}
 💰 **Цена билета:** {event['price_female']}-{event['price_male']} ₽ (зависит от пола)
-👥 **Осталось мест:** {max_count - current_count} из {max_count}
 
 ❗ Для регистрации потребуется:
 • ФИО
@@ -707,13 +701,14 @@ async def start_registration(callback: CallbackQuery, state: FSMContext):
     event_id = int(callback.data.split('_')[1])
     event = db.get_event_by_id(event_id)
     
-    # Проверяем лимит ещё раз (на случай, если места закончились между просмотром и регистрацией)
+    # Проверяем лимит ещё раз
     current_count = db.get_current_participants_count(event_id)
     max_count = event['max_participants'] if event['max_participants'] else 60
     
     if current_count >= max_count:
         await callback.message.answer(
-            f"😔 К сожалению, пока вы думали, все места на «{event['title']}» закончились!",
+            f"😔 К сожалению, дом BOB'a уже переполнен😭\n\n"
+            f"Я буду ждать тебя на следующей неделе❤️",
             reply_markup=back_keyboard(),
             parse_mode="Markdown"
         )
@@ -831,7 +826,8 @@ async def confirm_registration(callback: CallbackQuery, state: FSMContext):
     
     if current_count >= max_count:
         await callback.message.answer(
-            f"😔 К сожалению, места на «{event['title']}» закончились. Регистрация не сохранена.",
+            f"😔 К сожалению, дом BOB'a уже переполнен😭\n\n"
+            f"Я буду ждать тебя на следующей неделе❤️",
             reply_markup=main_keyboard(),
             parse_mode="Markdown"
         )
@@ -839,8 +835,9 @@ async def confirm_registration(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
     
-    # Берём username прямо из Telegram
+    # Обновляем или сохраняем username пользователя
     username = callback.from_user.username
+    db.save_user(callback.from_user.id, username, callback.from_user.full_name)
     
     reg_id = db.save_registration(data['event_id'], callback.from_user.id, data)
     db.mark_referral_registered(callback.from_user.id)
@@ -1031,7 +1028,6 @@ async def add_event_image(message: Message, state: FSMContext):
 async def confirm_add_event(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     
-    # Проверяем, что все необходимые данные есть
     required_fields = ['title', 'description', 'event_date', 'event_time', 'venue', 'age_restriction', 'price_male', 'price_female']
     missing = [f for f in required_fields if f not in data]
     if missing:
@@ -1180,7 +1176,7 @@ async def show_user_referrals(message: Message, state: FSMContext):
     text = f"👥 **Приглашения пользователя `{user_id}`:**\n\n"
     for ref in referrals:
         status = "✅ Зарегистрирован" if ref['registered'] == 1 else "⏳ Ещё не регистрировался"
-        username_display = f"@{ref['username']}" if ref['username'] else "нет username"
+        username_display = f"@{ref['username']}" if ref['username'] and ref['username'] != '-' else "нет username"
         text += f"📨 ID: `{ref['referred_id']}`\n"
         text += f"   👤 Имя: {ref['referred_name']}\n"
         text += f"   📱 Username: {username_display}\n"
@@ -1210,7 +1206,7 @@ async def admin_all_referrals(callback: CallbackQuery):
     
     text = "📋 **Все реферальные связи:**\n\n"
     for ref in referrals:
-        username_display = f"@{ref['referred_username']}" if ref['referred_username'] else "нет username"
+        username_display = f"@{ref['referred_username']}" if ref['referred_username'] and ref['referred_username'] != '-' else "нет username"
         text += f"👤 Пригласивший: `{ref['referrer_id']}`\n"
         text += f"   → Приглашённый: `{ref['referred_id']}`\n"
         text += f"   👤 Имя: {ref['referred_name']}\n"
@@ -1240,7 +1236,7 @@ async def export_referrals(callback: CallbackQuery):
             r.referrer_id as "ID пригласившего",
             r.referred_id as "ID приглашённого",
             r.referred_name as "Имя приглашённого",
-            u.username as "Username приглашённого",
+            COALESCE(u.username, '-') as "Username приглашённого",
             CASE WHEN r.registered = 1 THEN 'Да' ELSE 'Нет' END as "Зарегистрировался на ивент",
             r.created_at as "Дата приглашения"
         FROM referrals r
@@ -1260,7 +1256,7 @@ async def export_referrals(callback: CallbackQuery):
             'ID пригласившего': row['ID пригласившего'],
             'ID приглашённого': row['ID приглашённого'],
             'Имя приглашённого': row['Имя приглашённого'],
-            'Username приглашённого': f"@{row['Username приглашённого']}" if row['Username приглашённого'] else "-",
+            'Username приглашённого': f"@{row['Username приглашённого']}" if row['Username приглашённого'] != '-' else "-",
             'Зарегистрировался на ивент': row['Зарегистрировался на ивент'],
             'Дата приглашения': row['Дата приглашения']
         })
@@ -1314,7 +1310,7 @@ async def do_export(callback: CallbackQuery):
     data_list = []
     for reg in registrations:
         gender_text = "Мужской" if reg['gender'] == 'male' else "Женский" if reg['gender'] == 'female' else "-"
-        username_text = f"@{reg['username']}" if reg['username'] else "-"
+        username_text = f"@{reg['username']}" if reg['username'] and reg['username'] != '-' else "-"
         data_list.append({
             'Telegram Username': username_text,
             'ФИО': reg['full_name'],
