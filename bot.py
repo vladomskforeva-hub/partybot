@@ -66,6 +66,7 @@ class Database:
                 age_restriction TEXT,
                 price_male INTEGER,
                 price_female INTEGER,
+                max_participants INTEGER DEFAULT 60,
                 image_url TEXT,
                 is_active INTEGER DEFAULT 1,
                 created_by INTEGER,
@@ -161,13 +162,14 @@ class Database:
         cursor = self.conn.cursor()
         cursor.execute('''
             INSERT INTO events 
-            (title, description, event_date, event_time, venue, age_restriction, price_male, price_female, image_url, created_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (title, description, event_date, event_time, venue, age_restriction, 
+             price_male, price_female, max_participants, image_url, created_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             data['title'], data['description'], data['event_date'],
             data['event_time'], data['venue'],
             data['age_restriction'], data['price_male'], data['price_female'],
-            data.get('image_file_id'), data['created_by']
+            data.get('max_participants', 60), data.get('image_file_id'), data['created_by']
         ))
         self.conn.commit()
         event_id = cursor.lastrowid
@@ -186,6 +188,14 @@ class Database:
         count = cursor.fetchone()[0]
         cursor.close()
         return count > 0
+    
+    def get_current_participants_count(self, event_id):
+        """Получить текущее количество зарегистрированных участников"""
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT COUNT(*) as count FROM registrations WHERE event_id = ?', (event_id,))
+        count = cursor.fetchone()[0]
+        cursor.close()
+        return count
     
     def save_registration(self, event_id, user_id, data):
         cursor = self.conn.cursor()
@@ -313,7 +323,7 @@ class RegStates(StatesGroup):
     birth_date = State()
     phone = State()
     gender = State()
-    confirm = State()  # Убрали comment
+    confirm = State()
 
 class AdminStates(StatesGroup):
     title = State()
@@ -324,6 +334,7 @@ class AdminStates(StatesGroup):
     age_restriction = State()
     price_male = State()
     price_female = State()
+    max_participants = State()
     image_file_id = State()
 
 class ReferralStates(StatesGroup):
@@ -413,7 +424,7 @@ def generate_ticket(user_name, username, event_title, event_date, phone, gender,
         font_normal = ImageFont.load_default()
         font_small = ImageFont.load_default()
     
-    # Очищаем название от эмодзи (для билета)
+    # Очищаем название от эмодзи
     clean_title = event_title.replace('🎉', '').replace('🏝', '').replace('🎽', '').replace('⭐', '').replace('✨', '').replace('❗', '').replace('️', '').strip()
     
     draw.text((40, 40), "БИЛЕТ НА СОБЫТИЕ", fill='#e94560', font=font_title)
@@ -592,8 +603,13 @@ async def show_afisha(callback: CallbackQuery):
         except:
             date_str = event['event_date']
         
+        # Получаем количество свободных мест
+        current_count = db.get_current_participants_count(event['event_id'])
+        max_count = event['max_participants'] if event['max_participants'] else 60
+        places_left = max_count - current_count
+        
         keyboard.inline_keyboard.append([
-            InlineKeyboardButton(text=f"🎉 {event['title']} — {date_str}", callback_data=f"event_{event['event_id']}")
+            InlineKeyboardButton(text=f"{event['title']} — {date_str} | 🎟️ {places_left} мест", callback_data=f"event_{event['event_id']}")
         ])
     
     keyboard.inline_keyboard.append([InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_main")])
@@ -618,6 +634,21 @@ async def show_event_details(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text("❌ Событие не найдено", reply_markup=back_keyboard())
         return
     
+    # Проверяем лимит участников
+    current_count = db.get_current_participants_count(event_id)
+    max_count = event['max_participants'] if event['max_participants'] else 60
+    
+    if current_count >= max_count:
+        await callback.message.edit_text(
+            f"😔 К сожалению, на мероприятие «{event['title']}» уже зарегистрировано {max_count} человек.\n\n"
+            f"**Места закончились!**\n\n"
+            f"Следите за нашими следующими тусовками!",
+            reply_markup=back_keyboard(),
+            parse_mode="Markdown"
+        )
+        await callback.answer()
+        return
+    
     if db.check_registration(event_id, callback.from_user.id):
         await callback.message.edit_text(
             f"⚠️ Вы уже зарегистрированы на событие «{event['title']}»!\n\n"
@@ -633,20 +664,21 @@ async def show_event_details(callback: CallbackQuery, state: FSMContext):
         event_date = event['event_date']
     
     text = f"""
-🎉 **{event['title']}**
+**{event['title']}**
 
 📖 {event['description']}
 
 📅 **Дата:** {event_date} в {event['event_time']}
 📍 **Место:** {event['venue']}
 🔞 **Возраст:** {event['age_restriction']}
-💰 **Цена билета:** {event['price_female']}-{event['price_male']} ₽
+💰 **Цена билета:** {event['price_female']}-{event['price_male']} ₽ (зависит от пола)
+👥 **Осталось мест:** {max_count - current_count} из {max_count}
 
 ❗ Для регистрации потребуется:
 • ФИО
 • Дата рождения
 • Номер телефона
-• Пол
+• Пол (цена зависит от пола)
     """
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -674,6 +706,19 @@ async def show_event_details(callback: CallbackQuery, state: FSMContext):
 async def start_registration(callback: CallbackQuery, state: FSMContext):
     event_id = int(callback.data.split('_')[1])
     event = db.get_event_by_id(event_id)
+    
+    # Проверяем лимит ещё раз (на случай, если места закончились между просмотром и регистрацией)
+    current_count = db.get_current_participants_count(event_id)
+    max_count = event['max_participants'] if event['max_participants'] else 60
+    
+    if current_count >= max_count:
+        await callback.message.answer(
+            f"😔 К сожалению, пока вы думали, все места на «{event['title']}» закончились!",
+            reply_markup=back_keyboard(),
+            parse_mode="Markdown"
+        )
+        await callback.answer()
+        return
     
     await state.update_data(event_id=event_id, event_title=event['title'], 
                            event_price_male=event['price_male'], event_price_female=event['price_female'])
@@ -780,6 +825,20 @@ async def confirm_registration(callback: CallbackQuery, state: FSMContext):
     event_date = event['event_date'] if event else 'дата уточняется'
     event_date_formatted = datetime.strptime(event_date, '%Y-%m-%d').strftime('%d.%m.%Y') if event else 'дата уточняется'
     
+    # Проверяем лимит в последний раз
+    current_count = db.get_current_participants_count(data['event_id'])
+    max_count = event['max_participants'] if event['max_participants'] else 60
+    
+    if current_count >= max_count:
+        await callback.message.answer(
+            f"😔 К сожалению, места на «{event['title']}» закончились. Регистрация не сохранена.",
+            reply_markup=main_keyboard(),
+            parse_mode="Markdown"
+        )
+        await state.clear()
+        await callback.answer()
+        return
+    
     # Берём username прямо из Telegram
     username = callback.from_user.username
     
@@ -870,9 +929,9 @@ async def add_event_time(message: Message, state: FSMContext):
 async def add_event_venue(message: Message, state: FSMContext):
     await state.update_data(venue=message.text)
     await message.answer("🔞 Введите возрастное ограничение:\n(18+ / 16+ / Без ограничений)")
-    await state.set_state(AdminStates.age_restriction)  # ✅ ПРАВИЛЬНО
+    await state.set_state(AdminStates.age_restriction)
 
-@dp.message(AdminStates.age_restriction)  # Правильно
+@dp.message(AdminStates.age_restriction)
 async def add_event_age(message: Message, state: FSMContext):
     await state.update_data(age_restriction=message.text)
     await message.answer("💰 Введите стоимость билета для **МАЛЬЧИКОВ** (в рублях):\nНапример: 3000", parse_mode="Markdown")
@@ -899,10 +958,28 @@ async def add_event_price_female(message: Message, state: FSMContext):
             await message.answer("❌ Цена должна быть положительным числом")
             return
         await state.update_data(price_female=price)
-        await message.answer("🖼️ **Теперь отправьте фото афиши** (просто отправьте картинку)\n\nИли напишите 'нет', если фото не нужно:", parse_mode="Markdown")
-        await state.set_state(AdminStates.image_file_id)  # ← ИСПРАВИТЬ: было AdminStates.image
+        await message.answer("👥 Введите максимальное количество участников (по умолчанию 60):\n\nПросто напишите число или отправьте 'нет' для стандартного лимита 60", parse_mode="Markdown")
+        await state.set_state(AdminStates.max_participants)
     except ValueError:
         await message.answer("❌ Введите число (например: 2000)")
+
+@dp.message(AdminStates.max_participants)
+async def add_event_max_participants(message: Message, state: FSMContext):
+    if message.text.lower() == 'нет':
+        max_participants = 60
+    else:
+        try:
+            max_participants = int(message.text.strip())
+            if max_participants <= 0:
+                await message.answer("❌ Число должно быть положительным")
+                return
+        except ValueError:
+            await message.answer("❌ Введите число или 'нет'")
+            return
+    
+    await state.update_data(max_participants=max_participants)
+    await message.answer("🖼️ **Теперь отправьте фото афиши** (просто отправьте картинку)\n\nИли напишите 'нет', если фото не нужно:", parse_mode="Markdown")
+    await state.set_state(AdminStates.image_file_id)
 
 @dp.message(AdminStates.image_file_id)
 async def add_event_image(message: Message, state: FSMContext):
@@ -929,6 +1006,7 @@ async def add_event_image(message: Message, state: FSMContext):
 📍 **Место:** {data.get('venue', 'Не указано')}
 🔞 **Возраст:** {data.get('age_restriction', 'Не указано')}
 💰 **Цены:** Мужской — {data.get('price_male', '?')} ₽, Женский — {data.get('price_female', '?')} ₽
+👥 **Лимит участников:** {data.get('max_participants', 60)} человек
 🖼️ **Изображение:** {'✅ Есть' if image_file_id else '❌ Нет'}
 
 Подтверждаете добавление?
@@ -999,10 +1077,13 @@ async def list_events_admin(callback: CallbackQuery):
     text = "📋 **Все ивенты:**\n\n"
     for e in events:
         status = "✅ Активен" if e['is_active'] == 1 else "❌ Завершён"
-        text += f"🎉 *{e['title']}*\n"
+        current_count = db.get_current_participants_count(e['event_id'])
+        max_count = e['max_participants'] if e['max_participants'] else 60
+        text += f"*{e['title']}*\n"
         text += f"   📅 {e['event_date']} в {e['event_time']}\n"
         text += f"   📍 {e['venue']}\n"
         text += f"   💰 М: {e['price_male']} ₽ / Ж: {e['price_female']} ₽\n"
+        text += f"   👥 {current_count}/{max_count} чел.\n"
         text += f"   🆔 ID: `{e['event_id']}` | {status}\n\n"
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
