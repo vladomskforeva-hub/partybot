@@ -404,7 +404,7 @@ def generate_ticket(user_name, username, event_title, event_date, phone, gender,
     
     # Загружаем шрифт из файла в репозитории
     try:
-        font_path = "DejaVuLGCSans.ttf"  # ← изменено
+        font_path = "DejaVuLGCSans.ttf"
         font_title = ImageFont.truetype(font_path, 40)
         font_normal = ImageFont.truetype(font_path, 24)
         font_small = ImageFont.truetype(font_path, 18)
@@ -413,8 +413,11 @@ def generate_ticket(user_name, username, event_title, event_date, phone, gender,
         font_normal = ImageFont.load_default()
         font_small = ImageFont.load_default()
     
+    # Очищаем название от эмодзи (для билета)
+    clean_title = event_title.replace('🎉', '').replace('🏝', '').replace('🎽', '').replace('⭐', '').replace('✨', '').replace('❗', '').replace('️', '').strip()
+    
     draw.text((40, 40), "БИЛЕТ НА СОБЫТИЕ", fill='#e94560', font=font_title)
-    draw.text((40, 110), f"Мероприятие: {event_title}", fill='white', font=font_normal)
+    draw.text((40, 110), f"Мероприятие: {clean_title}", fill='white', font=font_normal)
     draw.text((40, 160), f"Дата: {event_date}", fill='#cccccc', font=font_normal)
     draw.text((40, 210), f"Участник: {user_name}", fill='white', font=font_normal)
     
@@ -637,13 +640,13 @@ async def show_event_details(callback: CallbackQuery, state: FSMContext):
 📅 **Дата:** {event_date} в {event['event_time']}
 📍 **Место:** {event['venue']}
 🔞 **Возраст:** {event['age_restriction']}
-💰 **Цена билета:** {event['price_female']}-{event['price_male']} ₽ (зависит от пола)
+💰 **Цена билета:** {event['price_female']}-{event['price_male']} ₽
 
 ❗ Для регистрации потребуется:
 • ФИО
 • Дата рождения
 • Номер телефона
-• Пол (цена зависит от пола)
+• Пол
     """
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
