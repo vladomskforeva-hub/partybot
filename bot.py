@@ -666,13 +666,13 @@ async def show_event_details(callback: CallbackQuery, state: FSMContext):
 📅 **Дата:** {event_date} в {event['event_time']}
 📍 **Место:** {event['venue']}
 🔞 **Возраст:** {event['age_restriction']}
-💰 **Цена билета:** {event['price_female']}-{event['price_male']} ₽ (зависит от пола)
+💰 **Цена билета:** {event['price_female']}-{event['price_male']} ₽
 
 ❗ Для регистрации потребуется:
 • ФИО
 • Дата рождения
 • Номер телефона
-• Пол (цена зависит от пола)
+• Пол 
     """
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
