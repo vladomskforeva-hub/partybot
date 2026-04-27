@@ -2,4 +2,4 @@ aiogram
 aiohttp
 Pillow
 pandas
-openpyx
+openpyxl
